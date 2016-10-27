@@ -63,6 +63,7 @@ import java.util.stream.Collectors;
 import javax.resource.spi.ConnectionManager;
 
 import com.mongodb.MongoClientOptions;
+import com.google.common.base.Splitter;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -397,26 +398,20 @@ public class MongoDBRepository extends DBSRepositoryBase {
      */
     protected static class UpdateListBuilder {
 
-        protected List<DBObject> updateList = new ArrayList<>(1);
+        protected List<DBObject> updateList = new ArrayList<>(10);
 
         protected DBObject update;
 
-        protected List<String> keys;
+        protected Set<String> prefixKeys;
+
+        protected Set<String> keys;
 
         protected UpdateListBuilder() {
             newUpdate();
         }
 
-        protected void newUpdate() {
-            updateList.add(update = new BasicDBObject());
-            keys = new ArrayList<>();
-        }
-
         protected void update(String op, String key, Object value) {
-            if (conflicts(key, keys)) {
-                newUpdate();
-            }
-            keys.add(key);
+            checkForConflict(key);
             DBObject map = (DBObject) update.get(op);
             if (map == null) {
                 update.put(op, map = new BasicDBObject());
@@ -429,14 +424,62 @@ public class MongoDBRepository extends DBSRepositoryBase {
          * <p>
          * A conflict occurs if one key is equals to or is a prefix of the other.
          */
-        protected boolean conflicts(String key, List<String> previousKeys) {
-            String keydot = key + '.';
-            for (String prev : previousKeys) {
-                if (prev.equals(key) || prev.startsWith(keydot) || key.startsWith(prev + '.')) {
+        protected void checkForConflict(String key) {
+            List<String> pKeys = getPrefixKeys(key);
+            if (conflictKeys(key, pKeys)) {
+                newUpdate();
+            }
+            prefixKeys.addAll(pKeys);
+            keys.add(key);
+        }
+
+        protected void newUpdate() {
+            updateList.add(update = new BasicDBObject());
+            int pSize = 10;
+            int size = 10;
+            if (prefixKeys != null) {
+                pSize = prefixKeys.size();
+            }
+            if (keys != null) {
+                size = keys.size();
+            }
+            prefixKeys = new HashSet<>(pSize);
+            keys = new HashSet<>(size);
+        }
+
+        protected boolean conflictKeys(String key, List<String> subkeys) {
+            if (prefixKeys.contains(key)) {
+                return true;
+            }
+            for (String sk: subkeys) {
+                if (keys.contains(sk)) {
                     return true;
                 }
             }
             return false;
+        }
+
+        /**
+         * return a list of parents key
+         * foo.0.bar -> [foo, foo.0, foo.0.bar]
+         */
+        protected List<String> getPrefixKeys(String key) {
+            List<String> ret = new ArrayList<>(10);
+            // much faster than regex String.split
+            Iterable<String> split = Splitter.on('.').split(key);
+            String path = null;
+            for (String part : split) {
+                if (path == null) {
+                    path = part;
+                } else {
+                    path += "." + part;
+                }
+                ret.add(path);
+            }
+            if (path == null) {
+                ret.add(key);
+            }
+            return ret;
         }
     }
 
